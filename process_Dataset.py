@@ -8,10 +8,10 @@ from edge_detect import process_maze_folder  # your existing folder-based functi
 
 
 
-# 👇 adjust this path to where your UnRAR.exe actually is
-rarfile.UNRAR_TOOL = r".\UnRAR.exe"
-# make sure it uses the extract command interface
-rarfile.USE_EXTRACT_CMD = True
+# # 👇 adjust this path to where your UnRAR.exe actually is
+# rarfile.UNRAR_TOOL = r".\UnRAR.exe"
+# # make sure it uses the extract command interface
+# rarfile.USE_EXTRACT_CMD = True
 
 
 # Change this if your dataset root is elsewhere

@@ -38,6 +38,7 @@ output/
 debug_vis/
 UnRAR.exe
 *csv
+ROS/Output/
 
 # Installer logs
 pip-log.txt
