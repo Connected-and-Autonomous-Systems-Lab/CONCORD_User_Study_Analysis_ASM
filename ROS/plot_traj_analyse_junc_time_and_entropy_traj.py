@@ -11,7 +11,7 @@ Outputs:
 
 import math
 from pathlib import Path
-from collections import deque  # === NEW ===
+from collections import deque  # for BFS
 
 import numpy as np
 import pandas as pd
@@ -67,19 +67,18 @@ MAZE_INFO = {
 # ======================================================
 # TREE DEFINITIONS (from your textual description)
 # ======================================================
-# === NEW: abstract tree structure of the mazes ===
 MAZE_TREES = {
     "Easy": {
         "root": "start",
         "children": {
-            "start": ["EJ1", "DE_E1"],   # deadend branch not tracked as junction
+            "start": ["EJ1", "DE_E1"],
             "EJ1": ["DE_E2", "DE_E3"],
         },
     },
     "Hard": {
         "root": "start",
         "children": {
-            "start": ["HJ1", "HJ11"],        # from start, two branches
+            "start": ["HJ1", "HJ11"],
             "HJ1": ["HJ2", "DE_H1"],
             "HJ2": ["HJ3", "DE_H2"],
             "HJ3": ["DE_H3", "DE_H4"],
@@ -139,10 +138,8 @@ def compute_time_column(df: pd.DataFrame) -> pd.Series:
 
 
 # ======================================================
-# TREE HELPERS (NEW)
+# TREE HELPERS
 # ======================================================
-# === NEW: generic helpers to work with the MAZE_TREES ===
-
 def build_parent_map(children: dict, root: str) -> dict:
     parent = {}
 
@@ -237,9 +234,12 @@ def plot_tree_with_path(level: str,
                         out_path: Path,
                         tree_def: dict,
                         maze_info_level: dict,
-                        visited_junction_order: list):
+                        visited_junction_order: list,
+                        bfs_sim: float | None = None,
+                        dfs_sim: float | None = None):
     """
     Plot the maze tree and highlight the path implied by visited_junction_order.
+    Also print BFS/DFS similarity values on the plot if provided.
     """
     children = tree_def["children"]
     root = tree_def["root"]
@@ -287,19 +287,32 @@ def plot_tree_with_path(level: str,
         if node == "start":
             plt.scatter([x], [y], s=80, marker="*", zorder=3)
         elif node in junction_ids:
-            # junctions
             if node in visited_set:
                 plt.scatter([x], [y], s=50, marker="o", zorder=3)
             else:
-                plt.scatter([x], [y], s=30, marker="o", facecolors="none", edgecolors="black", zorder=2)
+                plt.scatter([x], [y], s=30, marker="o", facecolors="none",
+                            edgecolors="black", zorder=2)
         else:
-            # deadends
             plt.scatter([x], [y], s=20, marker="x", alpha=0.6, zorder=1)
 
         plt.text(x + 0.05, y + 0.05, node, fontsize=7)
 
     plt.title(f"{level} maze tree (highlighted visited path)")
     plt.axis("off")
+
+    # === NEW: write BFS/DFS similarity values on the plot ===
+    if bfs_sim is not None and dfs_sim is not None:
+        text = f"BFS sim={bfs_sim:.2f}, DFS sim={dfs_sim:.2f}"
+        ax = plt.gca()
+        ax.text(
+            0.01, 0.99,
+            text,
+            transform=ax.transAxes,
+            va="top",
+            ha="left",
+            fontsize=9,
+        )
+
     plt.tight_layout()
     plt.savefig(out_path, dpi=200)
     plt.close()
@@ -443,7 +456,6 @@ def plot_trajectory_xy(df: pd.DataFrame,
 # ======================================================
 def main():
     all_visits = []  # for decision_times_summary
-    # We'll accumulate per-visit data; explorativeness will be derived from it.
 
     if not OUTPUT_ROOT.exists():
         print(f"[ERROR] Output root not found: {OUTPUT_ROOT.resolve()}")
@@ -459,11 +471,10 @@ def main():
         print(f"\n=== User: {user} | Level: {level} ===")
         print(f"Processing CSV: {csv_path}")
 
-        # Only analyze levels for which we have maze info
         maze_info_level = MAZE_INFO.get(level)
         if maze_info_level is None:
             print(f"  [INFO] No maze info for level '{level}', skipping analysis.")
-        # We'll still plot trajectory even if no maze info.
+        # We still plot trajectory even if no maze info.
 
         # Load CSV
         try:
@@ -496,7 +507,6 @@ def main():
         print(f"  [OK] Saved trajectory plot to {traj_png}")
 
         # ---- Junction analysis (only if we know maze layout for this level) ----
-        # === NEW: per-run visits list for tree/path analysis ===
         run_visits = []
 
         if maze_info_level is None:
@@ -516,16 +526,16 @@ def main():
             if visits:
                 print(f"  [INFO] Found {len(visits)} visit(s) to junction {j_id} at ({jx}, {jy})")
                 all_visits.extend(visits)
-                run_visits.extend(visits)   # === NEW ===
+                run_visits.extend(visits)
             else:
                 print(f"  [INFO] No visits detected for junction {j_id} at ({jx}, {jy})")
 
-        # === NEW: tree-based analysis & plotting, per run ===
+        # Tree-based analysis & plotting, per run
         tree_def = MAZE_TREES.get(level)
         if tree_def is not None:
             tree_png = csv_path.with_name(csv_path.stem + "_tree.png")
 
-            # get order of first visits to each junction for this run
+            # order of first visits to each junction for this run
             if run_visits:
                 rv_df = pd.DataFrame(run_visits)
                 first_visits = (
@@ -538,17 +548,6 @@ def main():
             else:
                 visited_junction_order = []
 
-            # Plot tree with highlighted path
-            plot_tree_with_path(
-                level=level,
-                out_path=tree_png,
-                tree_def=tree_def,
-                maze_info_level=maze_info_level,
-                visited_junction_order=visited_junction_order,
-            )
-            print(f"  [OK] Saved tree plot to {tree_png}")
-
-            # Compare with BFS / DFS traversals
             children = tree_def["children"]
             root = tree_def["root"]
             bfs_order_full = bfs_traversal(children, root)
@@ -566,6 +565,7 @@ def main():
                 sim_bfs = compute_order_similarity(bfs_junction_order, actual_order)
                 sim_dfs = compute_order_similarity(dfs_junction_order, actual_order)
 
+                # text classification for terminal output
                 if sim_bfs > sim_dfs:
                     pattern = "BFS-like"
                 elif sim_dfs > sim_bfs:
@@ -575,8 +575,31 @@ def main():
 
                 print(f"  [TREE] Run={run_name}  pattern={pattern} "
                       f"(sim_BFS={sim_bfs:.3f}, sim_DFS={sim_dfs:.3f})")
+
+                # plot with similarity printed on the figure
+                plot_tree_with_path(
+                    level=level,
+                    out_path=tree_png,
+                    tree_def=tree_def,
+                    maze_info_level=maze_info_level,
+                    visited_junction_order=visited_junction_order,
+                    bfs_sim=sim_bfs,
+                    dfs_sim=sim_dfs,
+                )
             else:
                 print("  [TREE] No junction visits in this run for traversal comparison.")
+                # still plot tree without similarity numbers
+                plot_tree_with_path(
+                    level=level,
+                    out_path=tree_png,
+                    tree_def=tree_def,
+                    maze_info_level=maze_info_level,
+                    visited_junction_order=visited_junction_order,
+                    bfs_sim=None,
+                    dfs_sim=None,
+                )
+
+            print(f"  [OK] Saved tree plot to {tree_png}")
 
     # ==================================================
     # SAVE SUMMARY CSVs
@@ -593,8 +616,6 @@ def main():
     print(f"\n[OK] Wrote decision time summary to {decision_csv.resolve()}")
 
     # 2) Explorativess summary (per user, level, junction)
-    #    We treat each visit's 'branch' as a choice. The more diverse the branches,
-    #    the more exploratory the user is at that junction.
     groups = visits_df.groupby(["user", "level", "junction_id", "junction_x", "junction_y"])
 
     exp_rows = []
