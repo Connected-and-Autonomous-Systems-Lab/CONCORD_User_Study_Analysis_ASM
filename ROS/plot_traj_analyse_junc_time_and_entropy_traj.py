@@ -33,6 +33,17 @@ CHILD_FRAME = "human/base_footprint"
 VISIBLE_RADIUS = 5.0       # user can "see" junction from this distance (units)
 JUNCTION_BOX_HALF = 3.0    # |x - jx| <= 3 and |y - jy| <= 3 => close enough to count as being at junction
 
+# Script location (for loading maze CSVs)
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+# Maze floor CSVs (tile centers) – adjust filenames if needed
+MAZE_FLOOR_CSVS = {
+    "Easy": SCRIPT_DIR / "dark_floor_xy_transformed_sorted_easy.csv",
+    "Hard": SCRIPT_DIR / "dark_floor_xy_transformed_sorted_hard.csv",
+    # Fallback if per-level file not found
+    "default": SCRIPT_DIR / "dark_floor_xy_transformed_sorted.csv",
+}
+
 # === Maze geometry info ===
 MAZE_INFO = {
     "Easy": {
@@ -135,6 +146,53 @@ def compute_time_column(df: pd.DataFrame) -> pd.Series:
     """
     ts0 = df["bag_timestamp_ns"].iloc[0]
     return (df["bag_timestamp_ns"] - ts0) / 1e9
+
+
+# ======================================================
+# MAZE FLOOR LOADING (for background tiles)
+# ======================================================
+def load_maze_floor_for_level(level: str) -> pd.DataFrame | None:
+    """
+    Try to load the maze floor CSV for a given level.
+    Looks for:
+      - MAZE_FLOOR_CSVS[level]
+      - MAZE_FLOOR_CSVS["default"]
+    Returns a DataFrame with X, Y columns or None if not found/invalid.
+    """
+    # Prefer level-specific file
+    candidates = []
+    if level in MAZE_FLOOR_CSVS:
+        candidates.append(MAZE_FLOOR_CSVS[level])
+    # Fallback
+    candidates.append(MAZE_FLOOR_CSVS["default"])
+
+    for path in candidates:
+        if path is None:
+            continue
+        if not path.exists():
+            continue
+
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            print(f"  [WARN] Failed to read maze CSV {path}: {e}")
+            continue
+
+        # Accept either X/Y or x/y
+        if {"X", "Y"}.issubset(df.columns):
+            df_use = df[["X", "Y"]].copy()
+        elif {"x", "y"}.issubset(df.columns):
+            df_use = df[["x", "y"]].copy()
+            df_use.columns = ["X", "Y"]
+        else:
+            print(f"  [WARN] Maze CSV {path} must contain 'X','Y' (or 'x','y'). Found: {list(df.columns)}")
+            continue
+
+        print(f"  [INFO] Loaded maze floor ({len(df_use)} tiles) from {path}")
+        return df_use
+
+    print(f"  [INFO] No valid maze floor CSV found for level '{level}'")
+    return None
 
 
 # ======================================================
@@ -420,13 +478,27 @@ def plot_trajectory_xy(df: pd.DataFrame,
                        level: str,
                        run_name: str,
                        out_path: Path,
-                       maze_info_level: dict | None):
+                       maze_info_level: dict | None,
+                       maze_floor_df: pd.DataFrame | None = None):
     """
     Plot 2D trajectory (x-y) and save to out_path.
     If maze_info_level is provided, mark start + junctions.
+    If maze_floor_df is provided, draw the maze tiles as a background.
     """
     plt.figure()
+
+    # --- NEW: draw maze tiles first (background) ---
+    if maze_floor_df is not None and not maze_floor_df.empty:
+        mx = maze_floor_df["X"].to_numpy()
+        my = maze_floor_df["Y"].to_numpy()
+        my = -my
+        mx = -mx
+        # Square markers with larger size so they look like floor cells
+        plt.scatter(mx, my, s=200, marker="s", alpha=0.2, edgecolors="none")
+
+    # --- Existing trajectory line ---
     plt.plot(df["x"], df["y"], linewidth=1)
+
     plt.xlabel("x (m)")
     plt.ylabel("y (m)")
     plt.title(f"{user} - {level} - {run_name} (x-y)")
@@ -476,6 +548,9 @@ def main():
             print(f"  [INFO] No maze info for level '{level}', skipping analysis.")
         # We still plot trajectory even if no maze info.
 
+        # --- NEW: load maze floor for this level (for background plotting) ---
+        maze_floor_df = load_maze_floor_for_level(level)
+
         # Load CSV
         try:
             df = pd.read_csv(csv_path)
@@ -503,7 +578,15 @@ def main():
 
         # ---- Plot trajectory and save next to CSV ----
         traj_png = csv_path.with_name(csv_path.stem + "_traj_xy.png")
-        plot_trajectory_xy(hdf, user, level, run_name, traj_png, maze_info_level)
+        plot_trajectory_xy(
+            hdf,
+            user,
+            level,
+            run_name,
+            traj_png,
+            maze_info_level,
+            maze_floor_df=maze_floor_df,
+        )
         print(f"  [OK] Saved trajectory plot to {traj_png}")
 
         # ---- Junction analysis (only if we know maze layout for this level) ----
