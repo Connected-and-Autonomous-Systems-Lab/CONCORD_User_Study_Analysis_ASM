@@ -11,6 +11,7 @@ Outputs:
 
 import math
 from pathlib import Path
+from collections import deque  # === NEW ===
 
 import numpy as np
 import pandas as pd
@@ -44,23 +45,58 @@ MAZE_INFO = {
     },
     "Hard": {
         "start": (91.5, -20.3),
-        # 14 junction coordinates provided
+        # 13 junction coordinates provided
         "junctions": [
-            ("HJ1",  90.0, -20.0),
-            ("HJ2", 132.0, -20.0),
-            ("HJ3", 120.0, -77.0),
-            ("HJ4", 105.0, -75.0),
-            ("HJ5",  20.0, -130.0),
-            ("HJ6",  63.0, -118.0),
-            ("HJ7",  90.0, -119.0),
-            ("HJ8",  90.0, -132.0),
-            ("HJ9",  20.0, -76.0),
-            ("HJ10", 63.0, -62.0),
-            ("HJ11", 78.0, -35.0),
-            ("HJ12", 77.0, -75.0),
-            ("HJ13", 35.0, -35.0),
-            ("HJ14", 35.0, -7.0),
+            ("HJ1", 132.0, -20.0),
+            ("HJ2", 120.0, -77.0),
+            ("HJ3", 105.0, -75.0),
+            ("HJ4",  20.0, -130.0),
+            ("HJ5",  63.0, -118.0),
+            ("HJ6",  90.0, -119.0),
+            ("HJ7",  90.0, -132.0),
+            ("HJ8",  20.0, -76.0),
+            ("HJ9", 63.0, -62.0),
+            ("HJ10", 78.0, -35.0),
+            ("HJ11", 77.0, -7.5),
+            ("HJ12", 35.0, -35.0),
+            ("HJ13", 35.0, -7.0),
         ],
+    },
+}
+
+# ======================================================
+# TREE DEFINITIONS (from your textual description)
+# ======================================================
+# === NEW: abstract tree structure of the mazes ===
+MAZE_TREES = {
+    "Easy": {
+        "root": "start",
+        "children": {
+            "start": ["EJ1", "DE_E1"],   # deadend branch not tracked as junction
+            "EJ1": ["DE_E2", "DE_E3"],
+        },
+    },
+    "Hard": {
+        "root": "start",
+        "children": {
+            "start": ["HJ1", "HJ11"],        # from start, two branches
+            "HJ1": ["HJ2", "DE_H1"],
+            "HJ2": ["HJ3", "DE_H2"],
+            "HJ3": ["DE_H3", "DE_H4"],
+
+            "HJ4": ["HJ5", "DE_H5"],
+            "HJ5": ["HJ6", "DE_H6"],
+            "HJ6": ["HJ7", "DE_H7"],
+            "HJ7": ["DE_H8", "DE_H9"],
+
+            "HJ8": ["HJ4", "DE_H10"],
+            "HJ9": ["HJ8", "DE_H11"],
+            "HJ10": ["HJ9", "DE_H12"],
+
+            "HJ11": ["HJ10", "HJ12"],
+            "HJ12": ["HJ13", "DE_H13"],
+            "HJ13": ["DE_H14", "DE_H15"],
+        },
     },
 }
 
@@ -100,6 +136,173 @@ def compute_time_column(df: pd.DataFrame) -> pd.Series:
     """
     ts0 = df["bag_timestamp_ns"].iloc[0]
     return (df["bag_timestamp_ns"] - ts0) / 1e9
+
+
+# ======================================================
+# TREE HELPERS (NEW)
+# ======================================================
+# === NEW: generic helpers to work with the MAZE_TREES ===
+
+def build_parent_map(children: dict, root: str) -> dict:
+    parent = {}
+
+    def dfs(node: str):
+        for ch in children.get(node, []):
+            parent[ch] = node
+            dfs(ch)
+
+    dfs(root)
+    return parent
+
+
+def bfs_traversal(children: dict, root: str) -> list:
+    """Return BFS order starting at root (including root)."""
+    order = []
+    q = deque([root])
+    visited = {root}
+    while q:
+        node = q.popleft()
+        order.append(node)
+        for ch in children.get(node, []):
+            if ch not in visited:
+                visited.add(ch)
+                q.append(ch)
+    return order
+
+
+def dfs_preorder(children: dict, root: str) -> list:
+    """Return DFS pre-order starting at root (including root)."""
+    order = []
+
+    def _dfs(node: str):
+        order.append(node)
+        for ch in children.get(node, []):
+            _dfs(ch)
+
+    _dfs(root)
+    return order
+
+
+def compute_order_similarity(ref_order: list, actual_order: list) -> float:
+    """
+    Compare two permutations (or partial permutations) of the same node set
+    using pairwise ordering agreement (0..1).
+    """
+    idx_ref = {n: i for i, n in enumerate(ref_order)}
+    idx_act = {n: i for i, n in enumerate(actual_order)}
+    common = list(set(idx_ref) & set(idx_act))
+    if len(common) <= 1:
+        return 1.0  # trivial / no comparison possible
+
+    agree = 0
+    total = 0
+    for i in range(len(common)):
+        for j in range(i + 1, len(common)):
+            a = common[i]
+            b = common[j]
+            total += 1
+            if (idx_ref[a] - idx_ref[b]) * (idx_act[a] - idx_act[b]) > 0:
+                agree += 1
+    return agree / total if total > 0 else 1.0
+
+
+def build_tree_layout(children: dict, root: str) -> dict:
+    """
+    Simple tree layout for plotting:
+    Returns dict: node -> (x, y) coordinates.
+    """
+    positions = {}
+    x_counter = 0
+
+    def dfs(node: str, depth: int):
+        nonlocal x_counter
+        chs = children.get(node, [])
+        if not chs:
+            # Leaf
+            positions[node] = (x_counter, -depth)
+            x_counter += 1
+        else:
+            child_xs = []
+            for ch in chs:
+                dfs(ch, depth + 1)
+                child_xs.append(positions[ch][0])
+            # place node at mean of children
+            positions[node] = (sum(child_xs) / len(child_xs), -depth)
+
+    dfs(root, 0)
+    return positions
+
+
+def plot_tree_with_path(level: str,
+                        out_path: Path,
+                        tree_def: dict,
+                        maze_info_level: dict,
+                        visited_junction_order: list):
+    """
+    Plot the maze tree and highlight the path implied by visited_junction_order.
+    """
+    children = tree_def["children"]
+    root = tree_def["root"]
+
+    positions = build_tree_layout(children, root)
+    parent_map = build_parent_map(children, root)
+
+    # junction nodes = ones that appear in MAZE_INFO for this level
+    junction_ids = {j_id for (j_id, _x, _y) in maze_info_level["junctions"]}
+
+    # set of nodes to highlight along root->junction paths
+    highlight_edges = set()
+
+    for j in visited_junction_order:
+        if j not in junction_ids:
+            continue
+        node = j
+        while node in parent_map:
+            p = parent_map[node]
+            edge = tuple(sorted((p, node)))
+            highlight_edges.add(edge)
+            node = p
+
+    plt.figure(figsize=(6, 5))
+
+    # Draw all edges (light)
+    for node, chs in children.items():
+        for ch in chs:
+            x = [positions[node][0], positions[ch][0]]
+            y = [positions[node][1], positions[ch][1]]
+            plt.plot(x, y, linewidth=1, alpha=0.4, color="black")
+
+    # Highlight path edges (thicker)
+    for (a, b) in highlight_edges:
+        x = [positions[a][0], positions[b][0]]
+        y = [positions[a][1], positions[b][1]]
+        plt.plot(x, y, linewidth=3, alpha=0.9, color="black")
+
+    # Draw nodes
+    all_nodes = set(positions.keys())
+    visited_set = set(visited_junction_order) | {"start"}
+
+    for node in all_nodes:
+        x, y = positions[node]
+        if node == "start":
+            plt.scatter([x], [y], s=80, marker="*", zorder=3)
+        elif node in junction_ids:
+            # junctions
+            if node in visited_set:
+                plt.scatter([x], [y], s=50, marker="o", zorder=3)
+            else:
+                plt.scatter([x], [y], s=30, marker="o", facecolors="none", edgecolors="black", zorder=2)
+        else:
+            # deadends
+            plt.scatter([x], [y], s=20, marker="x", alpha=0.6, zorder=1)
+
+        plt.text(x + 0.05, y + 0.05, node, fontsize=7)
+
+    plt.title(f"{level} maze tree (highlighted visited path)")
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
 
 
 # ======================================================
@@ -293,6 +496,9 @@ def main():
         print(f"  [OK] Saved trajectory plot to {traj_png}")
 
         # ---- Junction analysis (only if we know maze layout for this level) ----
+        # === NEW: per-run visits list for tree/path analysis ===
+        run_visits = []
+
         if maze_info_level is None:
             continue
 
@@ -310,8 +516,67 @@ def main():
             if visits:
                 print(f"  [INFO] Found {len(visits)} visit(s) to junction {j_id} at ({jx}, {jy})")
                 all_visits.extend(visits)
+                run_visits.extend(visits)   # === NEW ===
             else:
                 print(f"  [INFO] No visits detected for junction {j_id} at ({jx}, {jy})")
+
+        # === NEW: tree-based analysis & plotting, per run ===
+        tree_def = MAZE_TREES.get(level)
+        if tree_def is not None:
+            tree_png = csv_path.with_name(csv_path.stem + "_tree.png")
+
+            # get order of first visits to each junction for this run
+            if run_visits:
+                rv_df = pd.DataFrame(run_visits)
+                first_visits = (
+                    rv_df.groupby("junction_id")["t_start_s"]
+                    .min()
+                    .reset_index()
+                    .sort_values("t_start_s")
+                )
+                visited_junction_order = first_visits["junction_id"].tolist()
+            else:
+                visited_junction_order = []
+
+            # Plot tree with highlighted path
+            plot_tree_with_path(
+                level=level,
+                out_path=tree_png,
+                tree_def=tree_def,
+                maze_info_level=maze_info_level,
+                visited_junction_order=visited_junction_order,
+            )
+            print(f"  [OK] Saved tree plot to {tree_png}")
+
+            # Compare with BFS / DFS traversals
+            children = tree_def["children"]
+            root = tree_def["root"]
+            bfs_order_full = bfs_traversal(children, root)
+            dfs_order_full = dfs_preorder(children, root)
+
+            junction_ids = {j_id for (j_id, _x, _y) in maze_info_level["junctions"]}
+            visited_set = set(visited_junction_order)
+
+            # restrict BFS/DFS to junctions visited in this run
+            bfs_junction_order = [n for n in bfs_order_full if n in junction_ids and n in visited_set]
+            dfs_junction_order = [n for n in dfs_order_full if n in junction_ids and n in visited_set]
+            actual_order = [n for n in visited_junction_order if n in junction_ids]
+
+            if actual_order:
+                sim_bfs = compute_order_similarity(bfs_junction_order, actual_order)
+                sim_dfs = compute_order_similarity(dfs_junction_order, actual_order)
+
+                if sim_bfs > sim_dfs:
+                    pattern = "BFS-like"
+                elif sim_dfs > sim_bfs:
+                    pattern = "DFS-like"
+                else:
+                    pattern = "mixed/ambiguous"
+
+                print(f"  [TREE] Run={run_name}  pattern={pattern} "
+                      f"(sim_BFS={sim_bfs:.3f}, sim_DFS={sim_dfs:.3f})")
+            else:
+                print("  [TREE] No junction visits in this run for traversal comparison.")
 
     # ==================================================
     # SAVE SUMMARY CSVs
