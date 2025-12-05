@@ -7,7 +7,7 @@ Outputs:
 - Per-run trajectory plots saved next to each *_tf.csv
 - decision_times_summary.csv   (per user / level / run / junction / visit)
 - explorativeness_summary.csv  (per user / level / junction, with entropy)
-- hard_maze_cell_visit_summary.csv (per user, Hard level: unique cells, total visits)
+- maze_cell_visit_summary.csv  (per user & level: unique cells, total visits)
 """
 
 import math
@@ -40,13 +40,20 @@ CELL_ASSIGN_RADIUS = 2.0   # max distance (units) to snap a trajectory point to 
 # Script location (for loading maze CSVs)
 SCRIPT_DIR = Path(__file__).resolve().parent
 
-# Maze floor CSVs (tile centers) – adjust filenames if needed
+# === NEW: unified maze floor file with both Easy/Hard tiles ===
+# Expected columns: "maze", "X", "Y"  (maze values: "easy" / "hard")
+MAZE_INFO_CSV = SCRIPT_DIR / "maze_info.csv"
+
+# Fallback maze floor CSVs (if maze_info.csv is missing or invalid)
 MAZE_FLOOR_CSVS = {
     "Easy": SCRIPT_DIR / "dark_floor_xy_transformed_sorted_easy.csv",
     "Hard": SCRIPT_DIR / "dark_floor_xy_transformed_sorted_hard.csv",
     # Fallback if per-level file not found
     "default": SCRIPT_DIR / "dark_floor_xy_transformed_sorted.csv",
 }
+
+# Internal cache for maze_info.csv (so we only read once)
+_MAZE_INFO_DF: pd.DataFrame | None = None
 
 # === Maze geometry info ===
 MAZE_INFO = {
@@ -155,19 +162,75 @@ def compute_time_column(df: pd.DataFrame) -> pd.Series:
 # ======================================================
 # MAZE FLOOR LOADING (for background tiles)
 # ======================================================
+def _load_maze_info_df() -> pd.DataFrame | None:
+    """
+    Internal helper: load maze_info.csv once and cache it.
+    Expected columns: "maze", "X", "Y" (or "x","y").
+    """
+    global _MAZE_INFO_DF
+
+    if _MAZE_INFO_DF is not None:
+        return _MAZE_INFO_DF
+
+    if not MAZE_INFO_CSV.exists():
+        print(f"  [INFO] maze_info.csv not found at {MAZE_INFO_CSV}; "
+              f"will try legacy floor CSVs instead.")
+        return None
+
+    try:
+        df = pd.read_csv(MAZE_INFO_CSV)
+    except Exception as e:
+        print(f"  [WARN] Failed to read maze_info.csv ({MAZE_INFO_CSV}): {e}")
+        return None
+
+    # Basic validation
+    if "maze" not in df.columns:
+        print("  [WARN] maze_info.csv must contain a 'maze' column.")
+        return None
+
+    # Normalize X/Y columns
+    if {"X", "Y"}.issubset(df.columns):
+        pass
+    elif {"x", "y"}.issubset(df.columns):
+        df = df.rename(columns={"x": "X", "y": "Y"})
+    else:
+        print("  [WARN] maze_info.csv must contain 'X','Y' (or 'x','y'). "
+              f"Found: {list(df.columns)}")
+        return None
+
+    _MAZE_INFO_DF = df
+    print(f"  [INFO] Loaded maze_info.csv with {len(df)} rows from {MAZE_INFO_CSV}")
+    return _MAZE_INFO_DF
+
+
 def load_maze_floor_for_level(level: str) -> pd.DataFrame | None:
     """
-    Try to load the maze floor CSV for a given level.
-    Looks for:
-      - MAZE_FLOOR_CSVS[level]
-      - MAZE_FLOOR_CSVS["default"]
-    Returns a DataFrame with X, Y columns or None if not found/invalid.
+    Load the maze floor tiles for a given level ("Easy" or "Hard").
+
+    Priority:
+      1) Use maze_info.csv (column 'maze' == 'easy'/'hard') if available.
+      2) Fallback to legacy MAZE_FLOOR_CSVS[level] or MAZE_FLOOR_CSVS["default"].
     """
-    # Prefer level-specific file
+    # --- 1) Preferred: maze_info.csv ---
+    df_info = _load_maze_info_df()
+    if df_info is not None:
+        maze_label = level.lower().strip()  # "Easy" -> "easy", etc.
+        mask = df_info["maze"].astype(str).str.lower().str.strip() == maze_label
+        sub = df_info[mask].copy()
+        if not sub.empty:
+            # Ensure only X,Y columns are returned
+            sub = sub[["X", "Y"]].copy()
+            print(f"  [INFO] Loaded maze floor for level '{level}' "
+                  f"from maze_info.csv ({len(sub)} tiles).")
+            return sub
+        else:
+            print(f"  [WARN] maze_info.csv has no rows with maze='{maze_label}'. "
+                  f"Falling back to legacy floor CSVs for level '{level}'.")
+
+    # --- 2) Fallback: legacy per-level CSVs ---
     candidates = []
     if level in MAZE_FLOOR_CSVS:
         candidates.append(MAZE_FLOOR_CSVS[level])
-    # Fallback
     candidates.append(MAZE_FLOOR_CSVS["default"])
 
     for path in candidates:
@@ -189,13 +252,14 @@ def load_maze_floor_for_level(level: str) -> pd.DataFrame | None:
             df_use = df[["x", "y"]].copy()
             df_use.columns = ["X", "Y"]
         else:
-            print(f"  [WARN] Maze CSV {path} must contain 'X','Y' (or 'x','y'). Found: {list(df.columns)}")
+            print(f"  [WARN] Maze CSV {path} must contain 'X','Y' "
+                  f"(or 'x','y'). Found: {list(df.columns)}")
             continue
 
         print(f"  [INFO] Loaded maze floor ({len(df_use)} tiles) from {path}")
         return df_use
 
-    print(f"  [INFO] No valid maze floor CSV found for level '{level}'")
+    print(f"  [INFO] No valid maze floor data found for level '{level}'")
     return None
 
 
@@ -475,7 +539,7 @@ def find_junction_visits(df: pd.DataFrame,
 
 
 # ======================================================
-# === NEW: CELL VISIT COMPUTATION (Hard maze only) ====
+# === CELL VISIT COMPUTATION (both Easy & Hard) =======
 # ======================================================
 def compute_cell_visits_for_run(hdf: pd.DataFrame,
                                 maze_floor_df: pd.DataFrame) -> list[tuple[float, float]]:
@@ -531,6 +595,7 @@ def compute_cell_visits_for_run(hdf: pd.DataFrame,
 
     return visited_cells
 
+
 # ======================================================
 # PLOTTING
 # ======================================================
@@ -546,7 +611,11 @@ def plot_trajectory_xy(df: pd.DataFrame,
     If maze_info_level is provided, mark start + junctions.
     If maze_floor_df is provided, draw the maze tiles as a background.
     """
-    plt.figure()
+    # Smaller figure for Easy maze, default size for others
+    if level == "Easy":
+        plt.figure(figsize=(2.3, 2.3))
+    else:
+        plt.figure(figsize=(5, 5))
 
     # --- draw maze tiles first (background) ---
     if maze_floor_df is not None and not maze_floor_df.empty:
@@ -582,15 +651,16 @@ def plot_trajectory_xy(df: pd.DataFrame,
     plt.close()
 
 
+
 # ======================================================
 # MAIN
 # ======================================================
 def main():
     all_visits = []  # for decision_times_summary
 
-    # === NEW: per-user Hard maze cell stats ===
-    # structure: user -> {"cells": set((X,Y)), "total_visits": int}
-    hard_cell_stats: dict[str, dict[str, object]] = {}
+    # === NEW: per-user & per-level cell stats (Easy + Hard) ===
+    # structure: (user, level) -> {"cells": set((X,Y)), "total_visits": int}
+    cell_stats: dict[tuple[str, str], dict[str, object]] = {}
 
     if not OUTPUT_ROOT.exists():
         print(f"[ERROR] Output root not found: {OUTPUT_ROOT.resolve()}")
@@ -652,19 +722,24 @@ def main():
         )
         print(f"  [OK] Saved trajectory plot to {traj_png}")
 
-        # === NEW: cell visit stats for Hard maze ===
-        if level == "Hard" and maze_floor_df is not None and not maze_floor_df.empty:
+        # === NEW: cell visit stats for both Easy & Hard (if floor data exists) ===
+        if maze_floor_df is not None and not maze_floor_df.empty:
             run_cells = compute_cell_visits_for_run(hdf, maze_floor_df)
             if run_cells:
-                stats = hard_cell_stats.setdefault(
-                    user, {"cells": set(), "total_visits": 0}
+                key = (user, level)
+                stats = cell_stats.setdefault(
+                    key, {"cells": set(), "total_visits": 0}
                 )
                 stats["total_visits"] += len(run_cells)
                 # update set of unique cells
                 stats["cells"].update(run_cells)
-                print(f"  [CELLS] Hard maze: added {len(run_cells)} cell visits for user {user}")
+                print(f"  [CELLS] Level={level}: added {len(run_cells)} cell visits "
+                      f"for user {user}")
             else:
-                print("  [CELLS] Hard maze: no valid cell assignments for this run.")
+                print(f"  [CELLS] Level={level}: no valid cell assignments for this run.")
+        else:
+            print(f"  [CELLS] Level={level}: no floor data available; "
+                  f"skipping cell visit stats.")
 
         # ---- Junction analysis (only if we know maze layout for this level) ----
         run_visits = []
@@ -762,32 +837,33 @@ def main():
             print(f"  [OK] Saved tree plot to {tree_png}")
 
     # ==================================================
-    # === NEW: SAVE HARD MAZE CELL VISIT SUMMARY CSV ===
+    # === NEW: SAVE MAZE CELL VISIT SUMMARY CSV (both) =
     # ==================================================
-    if hard_cell_stats:
+    if cell_stats:
         rows = []
-        for user, stats in hard_cell_stats.items():
+        for (user, level), stats in cell_stats.items():
             cells_set = stats["cells"]
             total_visits = stats["total_visits"]
             rows.append({
                 "user": user,
-                "level": "Hard",
+                "level": level,
                 "unique_cells_visited": len(cells_set),
                 "total_cell_visits": int(total_visits),
             })
 
-        hard_cells_df = pd.DataFrame(rows)
-        hard_cells_csv = Path("hard_maze_cell_visit_summary.csv")
-        hard_cells_df.to_csv(hard_cells_csv, index=False)
-        print(f"\n[OK] Wrote Hard maze cell visit summary to {hard_cells_csv.resolve()}")
+        cell_df = pd.DataFrame(rows)
+        cell_csv = Path("maze_cell_visit_summary.csv")
+        cell_df.to_csv(cell_csv, index=False)
+        print(f"\n[OK] Wrote maze cell visit summary to {cell_csv.resolve()}")
     else:
-        print("\n[INFO] No Hard maze cell stats were computed (no Hard runs or no floor data).")
+        print("\n[INFO] No maze cell stats were computed (no valid runs or no floor data).")
 
     # ==================================================
     # SAVE SUMMARY CSVs (existing behavior)
     # ==================================================
     if not all_visits:
-        print("\n[INFO] No junction visits detected in any run; no decision/explorativeness summary CSVs created.")
+        print("\n[INFO] No junction visits detected in any run; "
+              "no decision/explorativeness summary CSVs created.")
         return
 
     visits_df = pd.DataFrame(all_visits)

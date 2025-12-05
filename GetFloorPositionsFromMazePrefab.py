@@ -8,8 +8,8 @@ from pathlib import Path
 # -------------------------------------------------
 # CONFIG
 # -------------------------------------------------
-PREFAB_PATH = Path("Hard_25.prefab")
-OUTPUT_CSV = Path("dark_floor_xy_transformed_sorted.csv")
+PREFAB_PATH = Path("Easy_10.prefab")
+OUTPUT_CSV = Path("bright_floor_xy_transformed_sorted.csv")
 
 
 def parse_unity_prefab_blocks(prefab_path: Path):
@@ -42,7 +42,7 @@ def find_dark_floor_gameobject_ids(blocks):
     for b in blocks:
         if b["class_id"] == "1":  # GameObject
             for line in b["lines"]:
-                if "m_Name:" in line and "Dark Floor(Clone)" in line:
+                if "m_Name:" in line and "Bright Floor(Clone)" in line:
                     dark_ids.add(b["file_id"])
                     break
     return dark_ids
