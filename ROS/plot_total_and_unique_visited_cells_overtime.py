@@ -193,7 +193,7 @@ def plot_combined_cell_visits(summary_df, title_base, out_path: Path, total_walk
     )
 
     fig.tight_layout()
-    fig.savefig(out_path)
+    fig.savefig(out_path, dpi=300)
     plt.close(fig)
     print(f"[OK] Saved combined plot: {out_path}")
 
