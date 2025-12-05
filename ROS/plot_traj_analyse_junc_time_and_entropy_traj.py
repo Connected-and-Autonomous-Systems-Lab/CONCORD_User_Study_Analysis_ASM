@@ -622,7 +622,7 @@ def plot_trajectory_xy(df: pd.DataFrame,
         mx = maze_floor_df["X"].to_numpy()
         my = maze_floor_df["Y"].to_numpy()
         # Square markers with larger size so they look like floor cells
-        plt.scatter(mx, my, s=200, marker="s", alpha=0.2, edgecolors="none")
+        plt.scatter(mx, my, s=200, marker="s", alpha=0.1, edgecolors="none")
 
     # --- Existing trajectory line ---
     plt.plot(df["x"], df["y"], linewidth=1)
