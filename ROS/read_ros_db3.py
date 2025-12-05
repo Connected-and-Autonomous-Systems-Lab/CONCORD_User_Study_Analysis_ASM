@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 # ===================================================
 BAG_DIR = r"../../Collaboration_user_study/Mugunthan/Easy/rosbag2_2025_11_26-18_13_26"
 MESSAGE_LIMIT = 5
-SHOW_ONLY_TOPIC_ID = None  # e.g. 3 to show only topic_id=3, or None for all
+SHOW_ONLY_TOPIC_ID = 16  # e.g. 3 to show only topic_id=3, or None for all
 
 
 # ===================================================
