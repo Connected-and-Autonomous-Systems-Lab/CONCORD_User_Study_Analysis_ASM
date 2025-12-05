@@ -352,8 +352,8 @@ def plot_average_with_detections(
         label="Avg unique cell visits",
     )
 
-    ax_left.set_xlabel("Time (s)")
-    ax_left.set_ylabel("Number of cells visited")
+    ax_left.set_xlabel("Time (s)", fontsize=18)
+    ax_left.set_ylabel("Number of cells visited", fontsize=18)
     ax_left.grid(True, linestyle="--", alpha=0.4)
 
     # Right Y-axis: coverage percentage
@@ -376,7 +376,13 @@ def plot_average_with_detections(
         alpha=0.2,
     )
     ax_right.set_ylim(0.0, 100.0)
-    ax_right.set_ylabel("Unique cell coverage (%)")
+    ax_right.set_ylabel("Unique cell coverage (%)", fontsize=18)
+
+    ax_left.tick_params(axis='both', labelsize=15)   # Left axis ticks
+    ax_right.tick_params(axis='y', labelsize=15)     # Right axis ticks
+    ax_left.tick_params(axis='x', labelsize=15)
+
+
 
     # Vertical dotted red lines at average detection times
     from matplotlib.lines import Line2D
@@ -416,7 +422,7 @@ def plot_average_with_detections(
             loc="upper left",
         )
 
-    ax_left.set_title(f"{maze_label} Maze - Average Cell Visits & Coverage Over Time")
+    # ax_left.set_title(f"{maze_label} Maze - Average Cell Visits & Coverage Over Time")
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=300)
