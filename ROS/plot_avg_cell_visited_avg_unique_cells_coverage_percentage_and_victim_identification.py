@@ -2,27 +2,24 @@
 # -*- coding: utf-8 -*-
 
 """
-Compute average Hard-maze cell visits & coverage over time across all users,
-and mark average human-detection times.
+Compute average cell visits & coverage over time for Easy and Hard mazes,
+and mark average human-detection times (per maze).
 
 Assumes:
-- ./Output/<user>/<Hard>/rosbag2_*_tf.csv       (TF data per run)
-- ./Output/<user>/<Hard>/rosbag2_*_tf_cell_visits_over_time.csv
-    produced by your existing script with columns:
-        timestamp_s, total_cell_visits, unique_cell_visits
+- ./Output/<user>/<Easy|Esay|easy|Hard|hard>/rosbag2_*_tf.csv
+- For each TF file, a corresponding:
+    rosbag2_*_tf_cell_visits_over_time.csv
+  produced by your existing script, with columns:
+    timestamp_s, total_cell_visits, unique_cell_visits
 
 - human_detection_location_all_users.csv in the root dir with columns:
     user_name, maze, bag_timestamp_ns, point.x, point.y, point.z
 
-Outputs (saved in the root dir):
+Outputs (in the root dir):
+- easy_maze_average_cell_visits_over_time.csv
+- easy_maze_average_cell_visits_over_time.png
 - hard_maze_average_cell_visits_over_time.csv
 - hard_maze_average_cell_visits_over_time.png
-
-The plot shows:
-- Avg total & unique cell visits over time (Hard maze)
-- Avg unique coverage (%) over time, 0–100% on right Y axis
-- Red vertical dotted lines at the average times of the
-  1st, 2nd, ..., 8th detected humans (Hard maze only)
 """
 
 from pathlib import Path
@@ -37,17 +34,29 @@ import matplotlib.pyplot as plt
 ROOT = Path("./Output")  # folder with user subfolders
 DETECTION_CSV = Path("human_detection_location_all_users.csv")
 
-HARD_WALKABLE_CELLS = 200
-TIME_LIMIT_S = 600.0     # 10 minutes
-BIN_SIZE_S = 10.0        # average every 10 seconds
+# Total walkable cells (from your previous script)
+WALKABLE_CELLS = {
+    "easy": 31,
+    "hard": 200,
+}
+
+# Time limits (seconds) for each maze.
+# Adjust "easy" if its limit is different.
+TIME_LIMITS = {
+    "easy": 200.0,  # e.g., 10 minutes
+    "hard": 600.0,  # 10 minutes
+}
+
+BIN_SIZE_S = 10.0  # average every 10 seconds
+
 
 # ======================================================
 # HELPERS
 # ======================================================
 
-def collect_hard_runs(root: Path):
+def collect_runs(root: Path, maze_type: str):
     """
-    Scan ./Output for Hard-maze TF runs.
+    Scan ./Output for TF runs of the given maze_type ("easy" or "hard").
 
     Returns:
         runs: list of dicts:
@@ -64,13 +73,22 @@ def collect_hard_runs(root: Path):
         print(f"[ERROR] ROOT directory not found: {root.resolve()}")
         return runs
 
+    maze_type = maze_type.lower()
+    if maze_type == "easy":
+        level_names = ("Easy", "Esay", "easy")
+    elif maze_type == "hard":
+        level_names = ("Hard", "hard")
+    else:
+        print(f"[ERROR] Unknown maze_type: {maze_type}")
+        return runs
+
     for user_dir in sorted(root.iterdir()):
         if not user_dir.is_dir():
             continue
         username = user_dir.name
 
-        # Look for "Hard" / "hard" folders
-        for level_name in ("Hard", "hard"):
+        # Look for the appropriate level folders
+        for level_name in level_names:
             level_dir = user_dir / level_name
             if not level_dir.is_dir():
                 continue
@@ -80,7 +98,7 @@ def collect_hard_runs(root: Path):
                 continue
 
             for tf_csv in tf_files:
-                # We only need min/max bag_timestamp_ns to map detections
+                # Only need min/max bag_timestamp_ns for mapping detections
                 try:
                     df_meta = pd.read_csv(tf_csv, usecols=["bag_timestamp_ns"])
                 except Exception as e:
@@ -102,18 +120,18 @@ def collect_hard_runs(root: Path):
                     }
                 )
 
-    print(f"[INFO] Found {len(runs)} Hard runs.")
+    print(f"[INFO] Found {len(runs)} {maze_type.capitalize()} runs.")
     return runs
 
 
-def build_average_cell_curves(runs):
+def build_average_cell_curves(runs, maze_type: str):
     """
-    For each Hard run, load its *_cell_visits_over_time.csv and
+    For each run of a given maze_type, load its *_cell_visits_over_time.csv and
     build step-wise series for:
         - total_cell_visits
         - unique_cell_visits
-        - coverage_pct (unique / HARD_WALKABLE_CELLS * 100)
-    sampled at t = 0, 10, 20, ..., TIME_LIMIT_S.
+        - coverage_pct (unique / WALKABLE_CELLS[maze_type] * 100)
+    sampled at t = 0, 10, 20, ..., TIME_LIMITS[maze_type].
 
     Returns:
         grid_s:      (T,) array of time points [s]
@@ -121,7 +139,11 @@ def build_average_cell_curves(runs):
         avg_unique:  (T,) average unique cell visits
         avg_cov_pct: (T,) average coverage percentage
     """
-    grid_s = np.arange(0.0, TIME_LIMIT_S + BIN_SIZE_S, BIN_SIZE_S)
+    maze_type = maze_type.lower()
+    time_limit_s = TIME_LIMITS[maze_type]
+    total_cells = WALKABLE_CELLS[maze_type]
+
+    grid_s = np.arange(0.0, time_limit_s + BIN_SIZE_S, BIN_SIZE_S)
 
     series_total = []
     series_unique = []
@@ -145,7 +167,8 @@ def build_average_cell_curves(runs):
             print(f"[WARN] Empty summary CSV: {summary_csv}, skipping.")
             continue
 
-        if not {"timestamp_s", "total_cell_visits", "unique_cell_visits"}.issubset(df.columns):
+        required_cols = {"timestamp_s", "total_cell_visits", "unique_cell_visits"}
+        if not required_cols.issubset(df.columns):
             print(f"[WARN] Missing required columns in {summary_csv}, skipping.")
             continue
 
@@ -153,7 +176,7 @@ def build_average_cell_curves(runs):
         total = df["total_cell_visits"].to_numpy(dtype=float)
         unique = df["unique_cell_visits"].to_numpy(dtype=float)
 
-        # Sort in case they are not strictly increasing
+        # Sort (just in case)
         order = np.argsort(times)
         times = times[order]
         total = total[order]
@@ -172,7 +195,7 @@ def build_average_cell_curves(runs):
                 total_grid[i] = 0.0
                 unique_grid[i] = 0.0
 
-        cov_grid = (unique_grid / float(HARD_WALKABLE_CELLS)) * 100.0
+        cov_grid = (unique_grid / float(total_cells)) * 100.0
 
         series_total.append(total_grid)
         series_unique.append(unique_grid)
@@ -180,7 +203,7 @@ def build_average_cell_curves(runs):
 
     if not series_total:
         raise RuntimeError(
-            "No valid Hard runs with *_cell_visits_over_time.csv found."
+            f"No valid {maze_type.capitalize()} runs with *_cell_visits_over_time.csv found."
         )
 
     total_arr = np.vstack(series_total)   # shape: (N_runs, T)
@@ -191,20 +214,23 @@ def build_average_cell_curves(runs):
     avg_unique = unique_arr.mean(axis=0)
     avg_cov = cov_arr.mean(axis=0)
 
-    print(f"[INFO] Averaged over {total_arr.shape[0]} Hard runs.")
+    print(f"[INFO] Averaged over {total_arr.shape[0]} {maze_type.capitalize()} runs.")
     return grid_s, avg_total, avg_unique, avg_cov
 
 
-def compute_average_detection_times(runs):
+def compute_average_detection_times(runs, maze_type: str):
     """
-    Map human detections in Hard maze to individual runs and compute
-    average detection times for the 1st..8th detected humans.
+    Map human detections in the given maze_type ("easy"/"hard")
+    to individual runs and compute average detection times
+    for the 1st..8th detected humans.
 
     Returns:
         avg_times: dict {k: mean_time_s} for k in [1..8]
         std_times: dict {k: std_time_s} for k in [1..8]
         count_by_k: dict {k: N_runs_with_kth_detection}
     """
+    maze_type = maze_type.lower()
+
     if not DETECTION_CSV.exists():
         print(f"[WARN] Detection CSV not found: {DETECTION_CSV.resolve()}")
         return {}, {}, {}
@@ -223,12 +249,12 @@ def compute_average_detection_times(runs):
     det["maze"] = det["maze"].astype(str).str.strip().str.lower()
     det["user_name"] = det["user_name"].astype(str).str.strip()
 
-    det_hard = det[det["maze"] == "hard"].copy()
-    if det_hard.empty:
-        print("[WARN] No Hard-maze detections found.")
+    det_mz = det[det["maze"] == maze_type].copy()
+    if det_mz.empty:
+        print(f"[WARN] No {maze_type.capitalize()}-maze detections found.")
         return {}, {}, {}
 
-    # Index runs by username for quick lookup
+    # Index runs by username
     runs_by_user = {}
     for r in runs:
         runs_by_user.setdefault(r["username"], []).append(r)
@@ -236,7 +262,9 @@ def compute_average_detection_times(runs):
     detections_by_run = {}  # key: tf_csv Path, value: list of t_rel_s
     unmatched = 0
 
-    for _, row in det_hard.iterrows():
+    time_limit_s = TIME_LIMITS[maze_type]
+
+    for _, row in det_mz.iterrows():
         uname = row["user_name"]
         ts_ns = int(row["bag_timestamp_ns"])
 
@@ -254,13 +282,15 @@ def compute_average_detection_times(runs):
         run_key = match["tf_csv"]
         t_rel_s = (ts_ns - match["t0_ns"]) / 1e9
         if t_rel_s < 0:
-            # Should not happen, but guard
             continue
 
         detections_by_run.setdefault(run_key, []).append(t_rel_s)
 
     if unmatched > 0:
-        print(f"[WARN] {unmatched} Hard detection rows could not be mapped to any run.")
+        print(
+            f"[WARN] {unmatched} {maze_type.capitalize()} detection rows "
+            f"could not be mapped to any run."
+        )
 
     # For each run, sort detection times and keep up to 8
     times_by_k = {k: [] for k in range(1, 9)}
@@ -268,7 +298,7 @@ def compute_average_detection_times(runs):
     for run_key, times_list in detections_by_run.items():
         # Keep reasonable times (e.g., within 1.5 * time limit)
         times_sorted = sorted(
-            t for t in times_list if 0.0 <= t <= TIME_LIMIT_S * 1.5
+            t for t in times_list if 0.0 <= t <= time_limit_s * 1.5
         )
         for idx, t in enumerate(times_sorted):
             k = idx + 1
@@ -297,12 +327,15 @@ def plot_average_with_detections(
     avg_unique,
     avg_cov_pct,
     avg_det_times,
+    maze_type: str,
     out_path: Path,
 ):
     """
-    Plot average Hard-maze cell visits & coverage over time,
+    Plot average cell visits & coverage over time for a given maze_type,
     plus vertical red dotted lines at average detection times.
     """
+    maze_label = maze_type.capitalize()
+
     fig, ax_left = plt.subplots()
 
     # Left Y-axis: cell counts
@@ -346,6 +379,8 @@ def plot_average_with_detections(
     ax_right.set_ylabel("Unique cell coverage (%)")
 
     # Vertical dotted red lines at average detection times
+    from matplotlib.lines import Line2D
+
     if avg_det_times:
         for k, t in sorted(avg_det_times.items()):
             ax_left.axvline(
@@ -355,16 +390,15 @@ def plot_average_with_detections(
                 linewidth=1.2,
                 alpha=0.9,
             )
-        # Optionally, you can add a legend entry for these lines:
-        # Create a dummy line for legend
-        from matplotlib.lines import Line2D
+
         line = Line2D(
             [0], [0],
             color="red",
             linestyle=":",
             linewidth=1.2,
-            label="Avg victim detection times",
+            label="Avg human detection times",
         )
+
         lines_left, labels_left = ax_left.get_legend_handles_labels()
         lines_right, labels_right = ax_right.get_legend_handles_labels()
         ax_left.legend(
@@ -382,12 +416,12 @@ def plot_average_with_detections(
             loc="upper left",
         )
 
-    ax_left.set_title("Hard Maze - Average Cell Visits & Coverage Over Time")
+    ax_left.set_title(f"{maze_label} Maze - Average Cell Visits & Coverage Over Time")
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=300)
     plt.close(fig)
-    print(f"[OK] Saved average Hard-maze plot: {out_path}")
+    print(f"[OK] Saved {maze_label} maze plot: {out_path}")
 
 
 # ======================================================
@@ -395,53 +429,66 @@ def plot_average_with_detections(
 # ======================================================
 
 def main():
-    # 1) Find all Hard runs
-    runs = collect_hard_runs(ROOT)
-    if not runs:
-        return
+    for maze_type in ("easy", "hard"):
+        print(f"\n========== {maze_type.upper()} MAZE ==========")
 
-    # 2) Build average cell-visit curves over time (0..600s every 10s)
-    grid_s, avg_total, avg_unique, avg_cov_pct = build_average_cell_curves(runs)
+        # 1) Find all runs for this maze
+        runs = collect_runs(ROOT, maze_type)
+        if not runs:
+            print(f"[WARN] No runs found for {maze_type} maze. Skipping.")
+            continue
 
-    # 3) Compute average human-detection times (Hard maze)
-    avg_det_times, std_det_times, count_by_k = compute_average_detection_times(runs)
-
-    if avg_det_times:
-        print("\n[INFO] Average Hard-maze human detection times:")
-        for k in sorted(avg_det_times.keys()):
-            mean_t = avg_det_times[k]
-            std_t = std_det_times.get(k, float("nan"))
-            n = count_by_k.get(k, 0)
-            print(
-                f"  {k}th human: mean = {mean_t:.2f} s, "
-                f"std = {std_t:.2f} s, N = {n}"
+        # 2) Build average cell-visit curves
+        try:
+            grid_s, avg_total, avg_unique, avg_cov_pct = build_average_cell_curves(
+                runs, maze_type
             )
-    else:
-        print("\n[WARN] No detection statistics available for Hard maze.")
+        except RuntimeError as e:
+            print(f"[WARN] {e}")
+            continue
 
-    # 4) Save averaged series as CSV
-    out_csv = Path("hard_maze_average_cell_visits_over_time.csv")
-    df_out = pd.DataFrame(
-        {
-            "timestamp_s": grid_s,
-            "avg_total_cell_visits": avg_total,
-            "avg_unique_cell_visits": avg_unique,
-            "avg_unique_coverage_pct": avg_cov_pct,
-        }
-    )
-    df_out.to_csv(out_csv, index=False)
-    print(f"[OK] Saved average Hard-maze CSV: {out_csv}")
+        # 3) Compute average human-detection times
+        avg_det_times, std_det_times, count_by_k = compute_average_detection_times(
+            runs, maze_type
+        )
 
-    # 5) Plot with vertical detection lines
-    out_png = Path("hard_maze_average_cell_visits_over_time.png")
-    plot_average_with_detections(
-        grid_s,
-        avg_total,
-        avg_unique,
-        avg_cov_pct,
-        avg_det_times,
-        out_png,
-    )
+        if avg_det_times:
+            print(f"\n[INFO] Average {maze_type.capitalize()}-maze human detection times:")
+            for k in sorted(avg_det_times.keys()):
+                mean_t = avg_det_times[k]
+                std_t = std_det_times.get(k, float("nan"))
+                n = count_by_k.get(k, 0)
+                print(
+                    f"  {k}th human: mean = {mean_t:.2f} s, "
+                    f"std = {std_t:.2f} s, N = {n}"
+                )
+        else:
+            print(f"\n[WARN] No detection statistics available for {maze_type} maze.")
+
+        # 4) Save averaged series as CSV
+        out_csv = Path(f"{maze_type}_maze_average_cell_visits_over_time.csv")
+        df_out = pd.DataFrame(
+            {
+                "timestamp_s": grid_s,
+                "avg_total_cell_visits": avg_total,
+                "avg_unique_cell_visits": avg_unique,
+                "avg_unique_coverage_pct": avg_cov_pct,
+            }
+        )
+        df_out.to_csv(out_csv, index=False)
+        print(f"[OK] Saved CSV: {out_csv}")
+
+        # 5) Plot with vertical detection lines
+        out_png = Path(f"{maze_type}_maze_average_cell_visits_over_time.png")
+        plot_average_with_detections(
+            grid_s,
+            avg_total,
+            avg_unique,
+            avg_cov_pct,
+            avg_det_times,
+            maze_type,
+            out_png,
+        )
 
 
 if __name__ == "__main__":
