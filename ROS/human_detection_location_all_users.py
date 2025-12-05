@@ -163,22 +163,25 @@ def collect_detection_for_bag(bag_dir: Path, user_name: str, maze: str,
 # ======================================================
 # STATS: EASY TIME + HARD COUNT
 # ======================================================
+# ======================================================
+# STATS: EASY TIME + HARD COUNT (WITH STD)
+# ======================================================
 def compute_and_print_stats(all_rows):
     """
     Computes:
-    - Average time (seconds) users spent identifying humans in Easy maze:
-      For each user: (max_ts - min_ts) over all Easy rows -> duration,
-      then average these durations across users.
+    - Average & STD time (seconds) users spent identifying humans in Easy maze:
+      For each user: (max_ts - min_ts) over all Easy rows -> duration.
 
-    - Average number of humans identified by the users in Hard maze:
-      For each user: number of rows in Hard -> count,
-      then average these counts across users.
+    - Average & STD number of humans identified by users in Hard maze:
+      For each user: number of rows in Hard -> count.
     """
-    # --- Easy maze: per-user time span ---
+    from math import sqrt
+
+    # --- Easy maze time spans ---
     easy_min_ts = {}
     easy_max_ts = {}
 
-    # --- Hard maze: per-user detection count ---
+    # --- Hard maze detection counts ---
     hard_counts = defaultdict(int)
 
     for row in all_rows:
@@ -198,30 +201,43 @@ def compute_and_print_stats(all_rows):
         elif maze == "Hard":
             hard_counts[user] += 1
 
-    # Compute Easy durations
+    # Compute durations for Easy
     easy_durations_sec = []
     for user in easy_min_ts:
         span_ns = easy_max_ts[user] - easy_min_ts[user]
         if span_ns > 0:
             easy_durations_sec.append(span_ns / 1e9)
 
-    avg_easy_time_sec = sum(easy_durations_sec) / len(easy_durations_sec) if easy_durations_sec else 0.0
-
-    # Compute Hard average detections per user
-    hard_counts_list = list(hard_counts.values())
-    avg_hard_detections = sum(hard_counts_list) / len(hard_counts_list) if hard_counts_list else 0.0
-
-    print("\n================= SUMMARY STATS =================")
+    # Mean & STD for Easy Maze Times
     if easy_durations_sec:
-        print(f"Average time users spent identifying humans in Easy maze: {avg_easy_time_sec:.2f} seconds")
+        mean_easy = sum(easy_durations_sec) / len(easy_durations_sec)
+        var_easy = sum((x - mean_easy) ** 2 for x in easy_durations_sec) / len(easy_durations_sec)
+        std_easy = sqrt(var_easy)
     else:
-        print("No Easy maze detection data found for computing time span.")
+        mean_easy = std_easy = 0.0
 
+    # Compute Hard detection counts per user
+    hard_counts_list = list(hard_counts.values())
+
+    # Mean & STD for Hard Maze Detection Counts
     if hard_counts_list:
-        print(f"Average number of humans identified by users in Hard maze: {avg_hard_detections:.2f}")
+        mean_hard = sum(hard_counts_list) / len(hard_counts_list)
+        var_hard = sum((x - mean_hard) ** 2 for x in hard_counts_list) / len(hard_counts_list)
+        std_hard = sqrt(var_hard)
     else:
-        print("No Hard maze detection data found for computing counts.")
+        mean_hard = std_hard = 0.0
+
+    # ------- PRINT RESULTS -------
+    print("\n================= SUMMARY STATS =================")
+    print("Easy Maze - Time spent identifying humans:")
+    print(f"  Mean: {mean_easy:.2f} seconds")
+    print(f"  STD :  {std_easy:.2f} seconds")
+
+    print("\nHard Maze - Number of detected humans:")
+    print(f"  Mean: {mean_hard:.2f}")
+    print(f"  STD :  {std_hard:.2f}")
     print("=================================================\n")
+
 
 
 # ======================================================
