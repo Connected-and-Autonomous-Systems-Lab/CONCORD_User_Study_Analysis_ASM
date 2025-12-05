@@ -7,6 +7,7 @@ Outputs:
 - Per-run trajectory plots saved next to each *_tf.csv
 - decision_times_summary.csv   (per user / level / run / junction / visit)
 - explorativeness_summary.csv  (per user / level / junction, with entropy)
+- hard_maze_cell_visit_summary.csv (per user, Hard level: unique cells, total visits)
 """
 
 import math
@@ -32,6 +33,9 @@ CHILD_FRAME = "human/base_footprint"
 # Visibility / junction thresholds
 VISIBLE_RADIUS = 5.0       # user can "see" junction from this distance (units)
 JUNCTION_BOX_HALF = 3.0    # |x - jx| <= 3 and |y - jy| <= 3 => close enough to count as being at junction
+
+# === NEW: cell assignment radius (for mapping positions to floor tiles) ===
+CELL_ASSIGN_RADIUS = 2.0   # max distance (units) to snap a trajectory point to a floor cell
 
 # Script location (for loading maze CSVs)
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -471,6 +475,63 @@ def find_junction_visits(df: pd.DataFrame,
 
 
 # ======================================================
+# === NEW: CELL VISIT COMPUTATION (Hard maze only) ====
+# ======================================================
+def compute_cell_visits_for_run(hdf: pd.DataFrame,
+                                maze_floor_df: pd.DataFrame) -> list[tuple[float, float]]:
+    """
+    Map each trajectory sample (x, y) to the nearest floor cell (X, Y)
+    within CELL_ASSIGN_RADIUS, and return the sequence of *cell entries*
+    as a list of (X, Y) tuples.
+
+    - We assign a cell (or None) to each frame.
+    - We then compress consecutive duplicates so that staying in a cell
+      for many frames counts as a single 'visit'.
+    - Moving from cell A -> cell B -> cell A again produces visits:
+          [A, B, A]  (3 passes)
+    """
+    if maze_floor_df is None or maze_floor_df.empty or hdf.empty:
+        return []
+
+    # Floor cell coordinates (N_cells, 2)
+    floor_xy = maze_floor_df[["X", "Y"]].to_numpy(dtype=float)
+    # Trajectory coordinates (N_steps, 2)
+    traj_xy = hdf[["x", "y"]].to_numpy(dtype=float)
+
+    # First: per-frame assigned cells (or None)
+    frame_cells: list[tuple[float, float] | None] = []
+
+    for px, py in traj_xy:
+        dx = floor_xy[:, 0] - px
+        dy = floor_xy[:, 1] - py
+        dist2 = dx * dx + dy * dy
+        idx = int(np.argmin(dist2))
+        d = math.sqrt(float(dist2[idx]))
+        if d <= CELL_ASSIGN_RADIUS:
+            cx = float(floor_xy[idx, 0])
+            cy = float(floor_xy[idx, 1])
+            frame_cells.append((cx, cy))
+        else:
+            frame_cells.append(None)
+
+    # Second: compress consecutive duplicates -> "cell passes"
+    visited_cells: list[tuple[float, float]] = []
+    prev_cell: tuple[float, float] | None = None
+
+    for cell in frame_cells:
+        if cell is None:
+            # We treat gaps as "not in any cell", but do not reset prev_cell:
+            # this way, when they come back to the same cell without leaving
+            # its neighborhood, it doesn't double-count.
+            continue
+        if cell != prev_cell:
+            visited_cells.append(cell)
+            prev_cell = cell
+        # if cell == prev_cell: same cell as previous frame -> no new visit
+
+    return visited_cells
+
+# ======================================================
 # PLOTTING
 # ======================================================
 def plot_trajectory_xy(df: pd.DataFrame,
@@ -487,12 +548,10 @@ def plot_trajectory_xy(df: pd.DataFrame,
     """
     plt.figure()
 
-    # --- NEW: draw maze tiles first (background) ---
+    # --- draw maze tiles first (background) ---
     if maze_floor_df is not None and not maze_floor_df.empty:
         mx = maze_floor_df["X"].to_numpy()
         my = maze_floor_df["Y"].to_numpy()
-        my = -my
-        mx = -mx
         # Square markers with larger size so they look like floor cells
         plt.scatter(mx, my, s=200, marker="s", alpha=0.2, edgecolors="none")
 
@@ -529,6 +588,10 @@ def plot_trajectory_xy(df: pd.DataFrame,
 def main():
     all_visits = []  # for decision_times_summary
 
+    # === NEW: per-user Hard maze cell stats ===
+    # structure: user -> {"cells": set((X,Y)), "total_visits": int}
+    hard_cell_stats: dict[str, dict[str, object]] = {}
+
     if not OUTPUT_ROOT.exists():
         print(f"[ERROR] Output root not found: {OUTPUT_ROOT.resolve()}")
         return
@@ -548,7 +611,7 @@ def main():
             print(f"  [INFO] No maze info for level '{level}', skipping analysis.")
         # We still plot trajectory even if no maze info.
 
-        # --- NEW: load maze floor for this level (for background plotting) ---
+        # load maze floor for this level (for background plotting AND cell mapping)
         maze_floor_df = load_maze_floor_for_level(level)
 
         # Load CSV
@@ -588,6 +651,20 @@ def main():
             maze_floor_df=maze_floor_df,
         )
         print(f"  [OK] Saved trajectory plot to {traj_png}")
+
+        # === NEW: cell visit stats for Hard maze ===
+        if level == "Hard" and maze_floor_df is not None and not maze_floor_df.empty:
+            run_cells = compute_cell_visits_for_run(hdf, maze_floor_df)
+            if run_cells:
+                stats = hard_cell_stats.setdefault(
+                    user, {"cells": set(), "total_visits": 0}
+                )
+                stats["total_visits"] += len(run_cells)
+                # update set of unique cells
+                stats["cells"].update(run_cells)
+                print(f"  [CELLS] Hard maze: added {len(run_cells)} cell visits for user {user}")
+            else:
+                print("  [CELLS] Hard maze: no valid cell assignments for this run.")
 
         # ---- Junction analysis (only if we know maze layout for this level) ----
         run_visits = []
@@ -685,10 +762,32 @@ def main():
             print(f"  [OK] Saved tree plot to {tree_png}")
 
     # ==================================================
-    # SAVE SUMMARY CSVs
+    # === NEW: SAVE HARD MAZE CELL VISIT SUMMARY CSV ===
+    # ==================================================
+    if hard_cell_stats:
+        rows = []
+        for user, stats in hard_cell_stats.items():
+            cells_set = stats["cells"]
+            total_visits = stats["total_visits"]
+            rows.append({
+                "user": user,
+                "level": "Hard",
+                "unique_cells_visited": len(cells_set),
+                "total_cell_visits": int(total_visits),
+            })
+
+        hard_cells_df = pd.DataFrame(rows)
+        hard_cells_csv = Path("hard_maze_cell_visit_summary.csv")
+        hard_cells_df.to_csv(hard_cells_csv, index=False)
+        print(f"\n[OK] Wrote Hard maze cell visit summary to {hard_cells_csv.resolve()}")
+    else:
+        print("\n[INFO] No Hard maze cell stats were computed (no Hard runs or no floor data).")
+
+    # ==================================================
+    # SAVE SUMMARY CSVs (existing behavior)
     # ==================================================
     if not all_visits:
-        print("\n[INFO] No junction visits detected in any run; no summary CSVs created.")
+        print("\n[INFO] No junction visits detected in any run; no decision/explorativeness summary CSVs created.")
         return
 
     visits_df = pd.DataFrame(all_visits)
