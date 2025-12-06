@@ -910,6 +910,120 @@ def main():
     explor_df.to_csv(explor_csv, index=False)
     print(f"[OK] Wrote explorativeness summary to {explor_csv.resolve()}")
 
+# ======================================================
+# NEW: COMBINED TRAJECTORY PLOT FOR YANG & SUBAL
+# ======================================================
+def plot_yang_subal_trajectories():
+    """
+    After running main(), create combined trajectory plots for the two users
+    'Yang' and 'Subal', for both Easy and Hard mazes.
+
+    The plots are similar to the per-run trajectory plots:
+    - Maze floor cells in the background
+    - Start and junctions (if MAZE_INFO has them)
+    - Overlaid trajectories of Yang and Subal in different colors
+
+    Outputs:
+    - ./Output/Yang_Subal_Easy_traj_xy.png   (if any data exists)
+    - ./Output/Yang_Subal_Hard_traj_xy.png   (if any data exists)
+    """
+    target_users = ["Subal", "Yang"]
+    levels = ["Easy", "Hard"]
+    user_colors = {
+        "Yang": "tab:blue",
+        "Subal": "tab:orange",
+    }
+
+    for level in levels:
+        maze_info_level = MAZE_INFO.get(level)
+        maze_floor_df = load_maze_floor_for_level(level)
+
+        # Collect and plot trajectories for the two users
+        something_plotted = False
+
+        # Figure size consistent with your per-run plots
+        figsize = (2.3, 2.3) if level == "Easy" else (10, 10)
+        plt.figure(figsize=figsize)
+
+        # Background maze tiles (if available)
+        if maze_floor_df is not None and not maze_floor_df.empty:
+            mx = maze_floor_df["X"].to_numpy()
+            my = maze_floor_df["Y"].to_numpy()
+            plt.scatter(mx, my, s=800, marker="s", alpha=0.1, edgecolors="none")
+
+        # For each user, overlay all runs for this level
+        for user in target_users:
+            user_dir = OUTPUT_ROOT / user / level
+            if not user_dir.exists():
+                print(f"[INFO] No directory for user='{user}', level='{level}': {user_dir}")
+                continue
+
+            user_label_used = False  # to avoid duplicate legend labels
+            for csv_path in sorted(user_dir.glob(CSV_PATTERN)):
+                try:
+                    df = pd.read_csv(csv_path)
+                except Exception as e:
+                    print(f"  [WARN] Failed to read {csv_path} for user={user}, level={level}: {e}")
+                    continue
+
+                mask = (
+                    (df["parent_frame"] == PARENT_FRAME) &
+                    (df["child_frame"] == CHILD_FRAME)
+                )
+                hdf = df[mask].copy()
+                if hdf.empty:
+                    continue
+
+                hdf = hdf.sort_values("bag_timestamp_ns").reset_index(drop=True)
+                # label only on first line for each user so the legend is clean
+                label = user if not user_label_used else None
+                user_label_used = True
+
+                plt.plot(
+                    hdf["x"],
+                    hdf["y"],
+                    linewidth=2,
+                    color=user_colors.get(user, None),
+                    label=label,
+                )
+                something_plotted = True
+
+        if not something_plotted:
+            plt.close()
+            print(f"[INFO] No usable trajectory data for Yang/Subal at level '{level}'. Skipping plot.")
+            continue
+
+        # Axes styling similar to plot_trajectory_xy
+        plt.xlabel("x (m)", fontsize=40)
+        plt.ylabel("y (m)", fontsize=40)
+        plt.xticks(fontsize=30)
+        plt.yticks(fontsize=30)
+        plt.gca().set_aspect("equal", adjustable="box")
+        plt.grid(True)
+
+        # Mark start and junctions (if available)
+        if maze_info_level is not None:
+            sx, sy = maze_info_level["start"]
+            plt.scatter([sx], [sy], marker="*", s=80)
+            plt.text(sx, sy, " start", fontsize=30)
+
+            for j_id, jx, jy in maze_info_level["junctions"]:
+                plt.scatter([jx], [jy], marker="o", s=40)
+                plt.text(jx, jy, f" {j_id}", fontsize=30)
+
+        plt.legend(fontsize=30, loc="upper left")
+        plt.tight_layout()
+
+        out_path = OUTPUT_ROOT / f"Yang_Subal_{level}_traj_xy.png"
+        plt.savefig(out_path, dpi=300)
+        plt.close()
+        print(f"[OK] Saved combined Yang/Subal trajectory plot for level '{level}' to {out_path}")
+
+
+    
+
+
 
 if __name__ == "__main__":
     main()
+    plot_yang_subal_trajectories()

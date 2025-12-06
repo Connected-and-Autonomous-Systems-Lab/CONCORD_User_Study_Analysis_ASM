@@ -336,55 +336,62 @@ def plot_average_with_detections(
     """
     maze_label = maze_type.capitalize()
 
-    fig, ax_left = plt.subplots()
+    fig, ax_left = plt.subplots(figsize=(10, 6))
 
-    # Left Y-axis: cell counts
+    # ============================
+    #  Left Y-axis (Cell counts)
+    # ============================
+
     ax_left.plot(
         grid_s,
         avg_total,
-        linewidth=1.5,
+        linewidth=4.0,              # thicker line
         label="Avg total cell visits",
     )
     ax_left.plot(
         grid_s,
         avg_unique,
-        linewidth=1.5,
+        linewidth=4.0,              # thicker line
         label="Avg unique cell visits",
     )
 
     ax_left.set_xlabel("Time (s)", fontsize=18)
     ax_left.set_ylabel("Number of cells visited", fontsize=18)
     ax_left.grid(True, linestyle="--", alpha=0.4)
+    ax_left.tick_params(axis='both', labelsize=18)
 
-    # Right Y-axis: coverage percentage
+    # ============================
+    #  Right Y-axis (Coverage %)
+    # ============================
+
     ax_right = ax_left.twinx()
-    coverage_color = "#99d8c9"  # very light green/teal
+    coverage_color = "#99d8c9"
 
     ax_right.plot(
         grid_s,
         avg_cov_pct,
-        linewidth=2.0,
-        alpha=0.5,
+        linewidth=4.0,              # thicker coverage line
+        alpha=0.6,
         color=coverage_color,
         label="Avg unique coverage (%)",
     )
+
     ax_right.fill_between(
         grid_s,
         avg_cov_pct,
         0.0,
         color=coverage_color,
-        alpha=0.2,
+        alpha=0.25,
     )
+
     ax_right.set_ylim(0.0, 100.0)
     ax_right.set_ylabel("Unique cell coverage (%)", fontsize=18)
+    ax_right.tick_params(axis='y', labelsize=18)
 
-    ax_left.tick_params(axis='both', labelsize=15)   # Left axis ticks
-    ax_right.tick_params(axis='y', labelsize=15)     # Right axis ticks
-    ax_left.tick_params(axis='x', labelsize=15)
+    # ============================
+    #  Detection Time Lines
+    # ============================
 
-
-
-    # Vertical dotted red lines at average detection times
     from matplotlib.lines import Line2D
 
     if avg_det_times:
@@ -393,42 +400,45 @@ def plot_average_with_detections(
                 x=t,
                 color="red",
                 linestyle=":",
-                linewidth=1.2,
+                linewidth=2.0,       # thicker vertical line
                 alpha=0.9,
             )
 
-        line = Line2D(
+        # Legend entry for detection lines
+        det_line = Line2D(
             [0], [0],
             color="red",
             linestyle=":",
-            linewidth=1.2,
+            linewidth=3.0,
             label="Avg human detection times",
         )
 
+        # Merge all legend items
         lines_left, labels_left = ax_left.get_legend_handles_labels()
         lines_right, labels_right = ax_right.get_legend_handles_labels()
+
         ax_left.legend(
-            lines_left + [line] + lines_right,
+            lines_left + [det_line] + lines_right,
             labels_left + ["Avg human detection times"] + labels_right,
             loc="upper left",
+            fontsize=20,            #  Increase legend font size here
         )
     else:
-        # Just combine the two axes' legends
+        # No detection times → merge typical legends
         lines_left, labels_left = ax_left.get_legend_handles_labels()
         lines_right, labels_right = ax_right.get_legend_handles_labels()
+
         ax_left.legend(
             lines_left + lines_right,
             labels_left + labels_right,
             loc="upper left",
+            fontsize=20,            #  Increase legend font size
         )
-
-    # ax_left.set_title(f"{maze_label} Maze - Average Cell Visits & Coverage Over Time")
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=300)
     plt.close(fig)
     print(f"[OK] Saved {maze_label} maze plot: {out_path}")
-
 
 # ======================================================
 # MAIN
