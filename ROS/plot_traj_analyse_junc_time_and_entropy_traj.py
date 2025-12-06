@@ -440,7 +440,7 @@ def plot_tree_with_path(level: str,
         )
 
     plt.tight_layout()
-    plt.savefig(out_path, dpi=200)
+    plt.savefig(out_path, dpi=300)
     plt.close()
 
 
@@ -627,11 +627,11 @@ def plot_trajectory_xy(df: pd.DataFrame,
     # --- Existing trajectory line ---
     plt.plot(df["x"], df["y"], linewidth=1)
 
-    plt.xlabel("x (m)", fontsize=18)
-    plt.ylabel("y (m)", fontsize=18)
+    plt.xlabel("x (m)", fontsize=20)
+    plt.ylabel("y (m)", fontsize=20)
     # plt.title(f"{user} - {level} - {run_name} (x-y)")
-    plt.xticks(fontsize=14)
-    plt.yticks(fontsize=14)
+    plt.xticks(fontsize=16)
+    plt.yticks(fontsize=16)
 
     # Equal aspect ratio helps see maze layout
     plt.gca().set_aspect("equal", adjustable="box")
@@ -641,12 +641,12 @@ def plot_trajectory_xy(df: pd.DataFrame,
         # Mark start
         sx, sy = maze_info_level["start"]
         plt.scatter([sx], [sy], marker="*", s=80)
-        plt.text(sx, sy, " start", fontsize=10)
+        plt.text(sx, sy, " start", fontsize=14)
 
         # Mark junctions
         for j_id, jx, jy in maze_info_level["junctions"]:
             plt.scatter([jx], [jy], marker="o", s=40)
-            plt.text(jx, jy, f" {j_id}", fontsize=10)
+            plt.text(jx, jy, f" {j_id}", fontsize=14)
 
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
